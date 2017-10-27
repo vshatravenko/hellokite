@@ -1,4 +1,6 @@
-FROM nginx:1.13
-# MAINTAINER Some Name <email@hellokite.com>
+FROM node:8.0
 
-RUN echo "Hello, Hellokite!" > /usr/share/nginx/html/index.html
+COPY server.js .
+
+EXPOSE 8080
+CMD node server.js
