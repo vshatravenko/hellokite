@@ -7,6 +7,11 @@ build:
 	@echo '> Building "hellokite" docker image...'
 	@docker build -t $(IMAGE) .
 
+push:
+
+	gcloud docker -- push $(IMAGE)
+
+
 run:
 	@echo '> Starting "hellokite" container...'
 	@docker run -d $(IMAGE)
