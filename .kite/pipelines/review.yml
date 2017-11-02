@@ -1,0 +1,150 @@
+# Check `docs/pipeline.md` to get info about this file
+resource_types:
+  - name: slack-notification
+    type: docker-image
+    source:
+      repository: cfcommunity/slack-notification-resource
+      tag: latest
+
+  - name: pull-request
+    type: docker-image
+    source:
+      repository: jtarchie/pr
+
+resources:
+  - name: hellokite-repository
+    type: git
+    source:
+      uri: git@github.com:helios-technologies/hellokite
+      branch: master
+      private_key: ((git_private_key))
+
+  - name: hellokite-repo
+    type: git
+    source:
+      uri: https://github.com/vshatravenko/hellokite.git
+      branch: master
+
+  - name: pull-requests
+    type: pull-request
+    source:
+      access_token: ((github_token))
+      base: master
+      private_key: ((git_private_key))
+      repo: helios-technologies/hellokite
+      uri: git@github.com:helios-technologies/hellokite
+
+  - name: hellokite-image
+    type: docker-image
+    source:
+      repository: gcr.io/helios-devel/hellokite
+      username: _json_key
+      password: ((gcr_password))
+
+  - name: slack-alert
+    type: slack-notification
+    source:
+      url: https://hooks.slack.com/services/((slack_webhook))
+
+jobs:
+  - name: build-pull-request
+    plan:
+      - get: pull-requests
+        trigger: true
+      - task: tag
+        config:
+          platform: linux
+          image_resource:
+            type: docker-image
+            source:
+              repository: alpine/git
+          run:
+            path: sh
+            args: ['-c', 'cd pull-requests && (git describe || echo 0.1.0-test) > ../tag/name']
+          inputs:
+            - name: pull-requests
+          outputs:
+            - name: tag
+      - put: hellokite-image
+        params:
+          build: pull-requests
+          tag: tag/name
+
+  - name: build-master
+    serial: true
+    plan:
+      - get: hellokite-repository
+        trigger: true
+      - task: tag
+        config:
+          platform: linux
+          image_resource:
+            type: docker-image
+            source:
+              repository: alpine/git
+          run:
+            path: sh
+            args: ['-c', 'cd hellokite-repository && (git describe --tags --abbrev=0 || echo 0.1.0) > ../tag/name']
+          inputs:
+            - name: hellokite-repository
+          outputs:
+            - name: tag
+      - put: hellokite-image
+        params:
+          build: hellokite-repository
+          tag: tag/name
+      - put: slack-alert
+        params:
+          channel: '@valentine'
+          text: |
+            hellokite master branch was built and pushed!
+            Check it out at:
+            $ATC_EXTERNAL_URL/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+            or at:
+            $ATC_EXTERNAL_URL/builds/$BUILD_ID
+
+  - name: test-pull-request
+    plan:
+      - get: pull-requests
+        passed:
+          - build-pull-request
+        trigger: true
+      - put: pull-requests
+        params:
+          path: pull-requests
+          status: pending
+      - task: run-tests
+        privileged: true
+        config:
+          platform: linux
+          image_resource:
+            type: docker-image
+            source:
+              repository: gcr.io/helios-devel/hellokite
+              tag: test
+              username: _json_key
+              password: ((gcr_password))
+          run:
+            path: bash
+            args: ["-c", "pushd pull-requests && npm test"]
+          inputs:
+            - name: pull-requests
+        on_failure:
+          put: pull-requests
+          params:
+            path: pull-requests
+            status: failure
+        on_success:
+          put: pull-requests
+          params:
+            path: pull-requests
+            status: success
+  - name: shipit
+    serial: true
+    plan:
+      - get: hellokite-repo
+      - task: helm-deploy
+        file: hellokite-repo/.kite/pipelines/tasks/helm-deploy.yml
+        params:
+          GOOGLE_APPLICATION_JSON: ((gcr_key))
+          KUBECONFIG_FILE: ((hc-devel-kubeconfig))
